@@ -134,6 +134,20 @@ function saveTop(list) {
   const st = window.platanusArcadeStorage;
   if (st) try { st.set(SKEY, memTop).catch(() => 0); } catch (e) { }
 }
+// contador de vidrios rotos (entero >= 0). Se relee antes de sumar para no pisar los de otros jugadores.
+const VKEY = 'chapita-brava:vidrios:v1';
+let memV = 0;
+const okV = (r) => (r && r.found && Number.isInteger(r.value) && r.value >= 0 ? r.value : 0);
+function loadV() {
+  const st = window.platanusArcadeStorage;
+  if (!st) return Promise.resolve(memV);
+  return Promise.race([Promise.resolve().then(() => st.get(VKEY)), new Promise((r) => setTimeout(() => r(null), 3000))]).then((r) => (memV = max(memV, okV(r)))).catch(() => memV);
+}
+function addV() {
+  const st = window.platanusArcadeStorage;
+  memV++;
+  if (st) try { st.get(VKEY).then((r) => st.set(VKEY, memV = max(memV, okV(r) + 1))).catch(() => 0); } catch (e) { }
+}
 const qualifies = (s) => s > 0 && (!memTop || memTop.length < 5 || s > memTop[memTop.length - 1].s);
 
 // ================= MUNDO 3D (pies) =================
@@ -417,11 +431,17 @@ function dude(g, x, y, s, o) {
   return hands[0];
 }
 // vecina con rolos en la ventana (sc = escala px/pie en la ventana, grita = brazos arriba y boca abierta)
+// grita = instante (ms) mientras regana: agita la escoba; 0 = tranquila
 function vecina(g, x, y, s, grita) {
   const hr = .9 * s;
   g.fillStyle(0xff6fa8).fillRect(x - 1.5 * s, y - .6 * s, 3 * s, 2 * s);
   g.lineStyle(.45 * s, 0xc68642);
-  if (grita) { g.lineBetween(x - 1.3 * s, y - .3 * s, x - 2.4 * s, y - 2.4 * s); g.lineBetween(x + 1.3 * s, y - .3 * s, x + 2.4 * s, y - 2.4 * s); }
+  if (grita) {
+    g.lineBetween(x - 1.3 * s, y - .3 * s, x - 2.4 * s, y - 2.4 * s); g.lineBetween(x + 1.3 * s, y - .3 * s, x + 2.4 * s, y - 2.4 * s);
+    const a = -.6 + sin(grita / 70) * .6, hx = x + 2.4 * s, hy = y - 2.4 * s, ex = hx + cos(a) * 4.5 * s, ey = hy + sin(a) * 4.5 * s, px = -sin(a) * s, py = cos(a) * s;
+    g.lineStyle(.3 * s, 0x8b5a2b).lineBetween(hx - cos(a) * s, hy - sin(a) * s, ex, ey);
+    g.fillStyle(0xe9c46a).fillTriangle(ex - px, ey - py, ex + px, ey + py, ex + cos(a) * 2 * s, ey + sin(a) * 2 * s);
+  }
   g.fillStyle(0xc68642).fillCircle(x, y - 1.6 * s, hr);
   g.fillStyle(0x3b2414).fillEllipse(x, y - 2.2 * s, hr * 2.2, hr * 1.2);
   g.fillStyle(0xff8fab);
@@ -446,6 +466,8 @@ const RCOL = { FOUL: 0xffffff, OUT: 0xff5d5d, SENCILLO: 0x9cff57, DOBLE: 0x57d3f
 const PCOL = [0xffd60a, 0x57d3ff];
 const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const LAG = 0; // ms de latencia de la cabina (se suma al stamp del swing)
+// pantalla tactil: la imagen llega tarde y el dedo tambien; ventana mas ancha y 40 ms de compensacion
+const TOUCH = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);
 const DEMO = [117.5, 18.5, 0]; // batazo del modo demo: entra por la ventana
 const ease = (k) => 1 - (1 - k) ** 3;
 // chapita: tapa roja con centro amarillo; spin la pone de canto
@@ -487,6 +509,9 @@ class Main extends Phaser.Scene {
     this.logo2 = txt(this, 400, 150, 'BRAVA', 7, 0xff4d4d);
     this.menu = txt(this, 400, 520, '', 2.5);
     this.tops = txt(this, 680, 400, '', 1.6, 0xffffff);
+    this.vid = txt(this, 400, 234, '', 2.2, 0xffd60a);
+    this.mute = txt(this, 400, 578, 'TOCA LA PANTALLA PARA SONIDO', 1.8, 0xffd60a);
+    this.mA = txt(this, 230, 251, 'TEMPRANO', 1.4, 0xffffff, 1); this.mB = txt(this, 570, 251, 'TARDE', 1.4, 0xffffff, 0);
     this.help = txt(this, 150, 400, 'COMO JUGAR\nB1: BATEA\nB2: PODER\nJOY: ALTURA\nBATEA CUANDO\nLA CHAPITA\nLLEGUE AL\nCUADRO ROJO', 1.6, 0xffffff);
     // tocar la pantalla = B1 (para jugar desde el telefono)
     this.input.on('pointerdown', () => { unlock(); tap.P1_1 = 1; stamp.P1_1 = lastIn = now(); });
@@ -498,16 +523,20 @@ class Main extends Phaser.Scene {
     if (window.__CHAPITA_COVER) return this.cover();
     this.attract();
   }
-  refreshTop() { this.tops.setText('RECORDS\n' + (memTop || DEF_TOP).map((e, i) => i + 1 + ' ' + e.n + ' ' + String(e.s).padStart(5, ' ')).join('\n')); }
-  showTitle(v) { for (const o of [this.logo1, this.logo2, this.menu, this.tops, this.help]) o.setVisible(v); for (const o of [this.hudL, this.hudR]) o.setVisible(!v); }
+  refreshTop() {
+    this.tops.setText('RECORDS\n' + (memTop || DEF_TOP).map((e, i) => i + 1 + ' ' + e.n + ' ' + String(e.s).padStart(5, ' ')).join('\n'));
+    this.vid.setText(memV ? 'VIDRIOS ROTOS: ' + memV : '');
+  }
+  showTitle(v) { for (const o of [this.logo1, this.logo2, this.menu, this.tops, this.help, this.vid]) o.setVisible(v); for (const o of [this.hudL, this.hudR]) o.setVisible(!v); }
   flash(a, col, b, still) {
-    this.big.setText(a).setTint(col || 0xffffff); this.sub.setText(b || '');
+    this.big.setText(a).setTint(col || 0xffffff); this.sub.setText(b || '').setScale(b ? min(3, 760 / (b.length * 10)) : 3);
     if (!still) { this.big.setScale(9); this.tweens.add({ targets: this.big, scale: 6, duration: 260, ease: 'Back.Out' }); }
   }
   attract() {
     this.demo = 1; this.mode = 0; this.turn = 0; this.broke = 0; this.marks = [];
     this.pl = [{ s: 0, c: 10, n: 0, str: 0, so: 0 }];
     this.showTitle(1); this.flash('', 0, '', 1); this.hint.setText('');
+    loadV().then(() => this.refreshTop());
     this.windup(.15);
   }
   start(m) {
@@ -535,7 +564,7 @@ class Main extends Phaser.Scene {
     if (this.demo && st != 'cover') {
       const m = tap.START2 ? 2 : tap.START1 || anyB() ? 1 : 0;
       if (m) { this.start(m); return clearTaps(); }
-    } else if (st != 'init' && st != 'over' && st != 'cover' && now() - lastIn > 20000) { this.attract(); return clearTaps(); }
+    } else if (st != 'init' && st != 'over' && st != 'post' && st != 'cover' && now() - lastIn > 20000) { this.attract(); return clearTaps(); }
     if (st == 'windup') { if (this.t >= .7) this.release(); }
     else if (st == 'pitch') this.uPitch();
     else if (st == 'fly') this.uFly(dt);
@@ -543,6 +572,10 @@ class Main extends Phaser.Scene {
     else if (st == 'turn') { if (this.t > 1.8) { this.turn = 1; this.windup(.2); } }
     else if (st == 'over') { if (this.t > 3.2) this.toInit(); }
     else if (st == 'init') this.uInit();
+    else if (st == 'post') {
+      if (this.t > .6 && (anyB() || tap.START1 || tap.START2)) { this.start(tap.START2 ? 2 : tap.START1 ? 1 : this.mode); return clearTaps(); }
+      if (this.t > 8) { this.attract(); return clearTaps(); }
+    }
     this.amb(dt);
     this.draw(dt);
     clearTaps();
@@ -564,11 +597,11 @@ class Main extends Phaser.Scene {
   }
   swing(b, ta) {
     const d = this.demo, pl = this.pl[this.turn];
-    const ts = d ? ta : stamp[b] + LAG, pw = !d && b.endsWith('2');
+    const ts = d ? ta : stamp[b] + LAG - (TOUCH ? 40 : 0), pw = !d && b.endsWith('2');
     const hz = d ? 2.4 : hd2('U') ? 3.1 : hd2('D') ? 1.6 : 2.35, dir = d ? 0 : (hd2('R') ? 1 : 0) - (hd2('L') ? 1 : 0);
-    this.sw = { t0: now(), hz, pw };
+    const W = (pl.n < 3 ? 150 : 110) * (pw ? .62 : 1) * (TOUCH ? 1.25 : 1), dtms = ts - ta, zb = pitchPos(this.p, 1)[2];
+    this.sw = { t0: now(), hz, pw, dt: dtms, W };
     sfx('swoosh');
-    const W = (pl.n < 3 ? 150 : 110) * (pw ? .62 : 1), dtms = ts - ta, zb = pitchPos(this.p, 1)[2];
     if (abs(dtms) > W) { this.sw.miss = dtms < 0 ? 'TEMPRANO' : 'TARDE'; return; }
     const pe = abs(zb - hz) / (pw ? .62 : .85);
     if (pe > 1) { this.sw.miss = zb > hz ? 'ERA ALTA' : 'ERA BAJA'; return; }
@@ -604,7 +637,8 @@ class Main extends Phaser.Scene {
     if (e == 'land' && s) { this.fxD.explode(10, s[0], s[1]); sfx('clk'); }
   }
   glass() {
-    this.broke = 1; this.scr = now() + 2600; sfx('glass'); this.time.delayedCall(220, () => sfx('scream'));
+    this.broke = 1; this.scr = now() + 2600; sfx('glass');
+    if (!this.demo) addV(); this.time.delayedCall(220, () => sfx('scream'));
     const p = proj(this.cam, 0, FY - .3, (WIN.z0 + WIN.z1) / 2);
     if (p) { this.fxG.explode(60, p[0], p[1]); this.fxC.explode(50, p[0], p[1] - 40); }
     this.cameras.main.shake(400, .014); this.cameras.main.flash(180, 255, 255, 240);
@@ -630,7 +664,7 @@ class Main extends Phaser.Scene {
     const p = this.p, e = pitchPos(p, 1), w = pitchPos(p, 1 + 6 / R0.y), sw = this.sw;
     if (abs(w[0] - CATCH_X) < 2.4 && w[2] < 4.6) { sfx('box'); this.boxT = .35; } else { sfx('clk'); this.marks.push([w[0], w[2]]); }
     this.pl[this.turn].str = 0;
-    if (sw) { sfx('strike'); this.endPitch(0, 'ABANICO!', sw.miss, 0xff5d5d, 1.1); }
+    if (sw) { sfx('strike'); this.endPitch(0, 'ABANICO!', sw.miss, 0xff5d5d, this.pl[this.turn].n < 3 ? 1.9 : 1.4); }
     else if (inSquare(e[0], e[2])) { sfx('strike'); this.endPitch(0, 'STRIKE', this.pl[this.turn].n < 3 ? 'DALE A B1 O TOCA' : 'SE LA DEJO PASAR', 0xff5d5d, this.pl[this.turn].n < 3 ? 1.8 : 1.1); }
     else this.endPitch(0, 'BOLA', 'NO CUENTA', 0xffffff, .9, 1);
   }
@@ -646,10 +680,12 @@ class Main extends Phaser.Scene {
     this.st = 'over'; this.t = 0;
     if (this.mode == 2) this.flash(a.s == b.s ? 'EMPATE' : a.s > b.s ? 'GANA J1' : 'GANA J2', 0xffd60a, a.s + ' VS ' + b.s + ' PIES');
     else this.flash('FIN', 0xffd60a, a.s + ' PIES');
+    const t = memTop || DEF_TOP;
+    this.endMsg = this.mode == 2 ? '' : qualifies(a.s) ? 'PUESTO ' + (t.filter((e) => e.s >= a.s).length + 1) + ' EN RECORDS' : 'TE FALTARON ' + ((t.length < 5 ? 0 : t[4].s) - a.s + 1) + ' PIES PARA EL TOP';
     this.initQ = (this.mode == 2 ? [0, 1] : [0]).filter((i) => qualifies(this.pl[i].s));
   }
   toInit() {
-    if (!this.initQ.length) return this.attract();
+    if (!this.initQ.length) { this.st = 'post'; this.t = 0; return this.flash('REVANCHA?', 0xffd60a, 'B1 O TOCA PARA JUGAR OTRA'); }
     this.ip = this.initQ.shift(); this.st = 'init'; this.t = 0; this.L = [0, 0, 0]; this.lp = 0; this.it = now();
   }
   uInit() {
@@ -726,7 +762,7 @@ class Main extends Phaser.Scene {
       const pp = 30 - c.y > 16 && proj(c, -.5, 30, 0); if (pp) dude(gp, pp[0], pp[1], pp[2], { sh: 0x2a9d8f, pa: 0x8d99ae, sk: SKIN[1], ha: 0x1b1b1b, cap: 0x1d4ed8, arms: [2, .4] });
       const wp = proj(c, 0, FY - .4, WIN.z0 + 1.6);
       if (wp) {
-        vecina(gp, wp[0], wp[1], wp[2], n < this.scr);
+        vecina(gp, wp[0], wp[1], wp[2], n < this.scr ? n : 0);
         if (this.broke) {
           const q = proj(c, 0, FY - .5, (WIN.z0 + WIN.z1) / 2);
           for (let i = 0; i < 9; i++) { const a = i * .7 + .3, r = (WIN.x1 - WIN.x0) * .5 * q[2]; gp.lineStyle(2, 0xffffff, .9).lineBetween(q[0], q[1], q[0] + cos(a) * r * (.5 + (i % 3) * .25), q[1] + sin(a) * r * .55); }
@@ -741,6 +777,16 @@ class Main extends Phaser.Scene {
       }
     }
     if (this.say.text) { const b = this.say.getBounds(); gu.fillStyle(0xffffff, .95).fillRoundedRect(b.x - 10, b.y - 8, b.width + 20, b.height + 16, 10).fillTriangle(b.centerX - 12, b.bottom + 7, b.centerX + 12, b.bottom + 7, b.centerX, b.bottom + 24); this.say.setTint(0xd62828).setDepth(56); }
+    // los botones de la pagina no cuentan como gesto dentro del iframe: el audio solo se activa tocando el juego
+    this.mute.setVisible(!!AC && AC.state != 'running' && this.st != 'cover' && !this.say.text && (this.demo || this.pl[this.turn].n < 3)).setY(this.demo ? 578 : 80);
+    // medidor de tiempo del abanico: zona verde = ventana real, marca = cuando bateo
+    const mt = this.st == 'res' && !this.demo && !this.fl && this.sw && this.sw.dt != null && c.d < 0;
+    this.mA.setVisible(mt); this.mB.setVisible(mt);
+    if (mt) {
+      const s = this.sw, x = 400 + clamp(s.dt * .5, -155, 155);
+      gu.fillStyle(0, .6).fillRoundedRect(240, 236, 320, 30, 8).fillStyle(0x9cff57, .85).fillRect(400 - s.W * .5, 241, s.W, 20).fillStyle(0xffd60a).fillRect(398, 238, 4, 26);
+      gu.fillStyle(0xffffff).fillTriangle(x - 9, 226, x + 9, 226, x, 242).fillRect(x - 2, 236, 4, 30);
+    }
     for (const o of [this.tops, this.help]) if (o.visible) { const b = o.getBounds(); gu.fillStyle(0, .45).fillRoundedRect(b.x - 10, b.y - 8, b.width + 20, b.height + 16, 8); }
     if (this.st == 'cover') {
       gu.lineStyle(6, 0xffffff, .8);
@@ -757,7 +803,7 @@ class Main extends Phaser.Scene {
       this.hudL.setText('J' + (this.turn + 1) + '  ' + p.s + ' PIES').setTint(PCOL[this.turn]);
       this.hudR.setText(this.mode == 2 ? 'J1 ' + this.pl[0].s + '  J2 ' + this.pl[1].s : 'REC ' + (memTop || DEF_TOP)[0].n + ' ' + (memTop || DEF_TOP)[0].s);
       for (let i = 0; i < 10; i++) chapita(gu, 26 + i * 22, 52, 16, 0, i < p.c ? 1 : .25);
-      this.hint.setText(p.n < 3 && (this.st == 'windup' || this.st == 'pitch') ? 'B1 CUANDO SE CIERRE EL CIRCULO' : '');
+      this.hint.setText(this.st == 'over' || this.st == 'init' || this.st == 'post' ? this.endMsg : p.n < 3 && (this.st == 'windup' || this.st == 'pitch') ? 'B1 CUANDO SE CIERRE EL CIRCULO' : '');
       if (this.st == 'init') { const x = 400 - 75 + this.lp * 60; gu.fillStyle(PCOL[this.ip]).fillRect(x, 224, 30, 4); }
     }
     this.hudL.setVisible(!!this.mode && !this.demo); this.hudR.setVisible(!!this.mode && !this.demo);
