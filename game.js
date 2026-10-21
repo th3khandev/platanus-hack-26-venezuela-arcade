@@ -50,6 +50,10 @@ addEventListener('keyup', (e) => { const c = kc(e); if (c) held[c] = 0; });
 addEventListener('blur', () => { for (const c in held) held[c] = 0; });
 // algun boton de accion (1..6) del prefijo P1_ / P2_
 const anyBtn = (p) => { for (let i = 1; i < 7; i++) if (tap[p + i]) return p + i; return 0; };
+// los turnos son alternos: el que batea puede usar cualquiera de los dos mandos
+// (en movil el mando P2 queda arriba y es el primero que se toca)
+const anyB = () => anyBtn('P1_') || anyBtn('P2_');
+const tp2 = (s) => tap['P1_' + s] || tap['P2_' + s], hd2 = (s) => held['P1_' + s] || held['P2_' + s];
 const clearTaps = () => { for (const c in tap) tap[c] = 0; };
 
 // ================= AUDIO =================
@@ -483,6 +487,9 @@ class Main extends Phaser.Scene {
     this.logo2 = txt(this, 400, 150, 'BRAVA', 7, 0xff4d4d);
     this.menu = txt(this, 400, 520, '', 2.5);
     this.tops = txt(this, 680, 400, '', 1.6, 0xffffff);
+    this.help = txt(this, 150, 400, 'COMO JUGAR\nB1: BATEA\nB2: PODER\nJOY: ALTURA\nBATEA CUANDO\nLA CHAPITA\nLLEGUE AL\nCUADRO ROJO', 1.6, 0xffffff);
+    // tocar la pantalla = B1 (para jugar desde el telefono)
+    this.input.on('pointerdown', () => { unlock(); tap.P1_1 = 1; stamp.P1_1 = lastIn = now(); });
     drawHand(this.hand, 0);
     this.kids = KIDS0.map((k) => ({ x: k[0], y: k[1], tx: k[0], ty: k[1], ph: 0 }));
     this.marks = []; this.boxT = 0; this.nb = 2; this.nm = 12; this.freeze = 0;
@@ -491,9 +498,8 @@ class Main extends Phaser.Scene {
     if (window.__CHAPITA_COVER) return this.cover();
     this.attract();
   }
-  get P() { return this.turn ? 'P2_' : 'P1_'; }
   refreshTop() { this.tops.setText('RECORDS\n' + (memTop || DEF_TOP).map((e, i) => i + 1 + ' ' + e.n + ' ' + String(e.s).padStart(5, ' ')).join('\n')); }
-  showTitle(v) { for (const o of [this.logo1, this.logo2, this.menu, this.tops]) o.setVisible(v); for (const o of [this.hudL, this.hudR]) o.setVisible(!v); }
+  showTitle(v) { for (const o of [this.logo1, this.logo2, this.menu, this.tops, this.help]) o.setVisible(v); for (const o of [this.hudL, this.hudR]) o.setVisible(!v); }
   flash(a, col, b, still) {
     this.big.setText(a).setTint(col || 0xffffff); this.sub.setText(b || '');
     if (!still) { this.big.setScale(9); this.tweens.add({ targets: this.big, scale: 6, duration: 260, ease: 'Back.Out' }); }
@@ -527,13 +533,13 @@ class Main extends Phaser.Scene {
     this.t += dt;
     const st = this.st;
     if (this.demo && st != 'cover') {
-      const m = tap.START2 || anyBtn('P2_') ? 2 : tap.START1 || anyBtn('P1_') ? 1 : 0;
+      const m = tap.START2 ? 2 : tap.START1 || anyB() ? 1 : 0;
       if (m) { this.start(m); return clearTaps(); }
     } else if (st != 'init' && st != 'over' && st != 'cover' && now() - lastIn > 20000) { this.attract(); return clearTaps(); }
     if (st == 'windup') { if (this.t >= .7) this.release(); }
     else if (st == 'pitch') this.uPitch();
     else if (st == 'fly') this.uFly(dt);
-    else if (st == 'res') { if (this.t > this.resT || (this.t > .35 && !this.demo && (anyBtn(this.P) || tap.START1 || tap.START2))) this.next(); }
+    else if (st == 'res') { if (this.t > this.resT || (this.t > .35 && !this.demo && (anyB() || tap.START1 || tap.START2))) this.next(); }
     else if (st == 'turn') { if (this.t > 1.8) { this.turn = 1; this.windup(.2); } }
     else if (st == 'over') { if (this.t > 3.2) this.toInit(); }
     else if (st == 'init') this.uInit();
@@ -550,17 +556,16 @@ class Main extends Phaser.Scene {
     const p = this.p, n = now(), ta = p.t0 + p.T * 1000, u = (n - p.t0) / (p.T * 1000);
     if (u > .35 && this.t < 9) drawHand(this.hand, 0), this.t = 9;
     if (!this.sw) {
-      const P = this.P;
-      const b = this.demo ? (n >= ta - 8 ? 'D' : 0) : tap[P + '1'] ? P + '1' : tap[P + '2'] ? P + '2' : anyBtn(P);
+      const b = this.demo ? (n >= ta - 8 ? 'D' : 0) : ['P1_1', 'P2_1', 'P1_2', 'P2_2'].find((k) => tap[k]) || anyB();
       if (b) this.swing(b, ta);
     }
     if (this.pend && n >= this.pend.at) return this.hit();
     if (!this.pend && u >= 1 + 6 / R0.y) this.call();
   }
   swing(b, ta) {
-    const P = this.P, d = this.demo, pl = this.pl[this.turn];
+    const d = this.demo, pl = this.pl[this.turn];
     const ts = d ? ta : stamp[b] + LAG, pw = !d && b.endsWith('2');
-    const hz = d ? 2.4 : held[P + 'U'] ? 3.1 : held[P + 'D'] ? 1.6 : 2.35, dir = d ? 0 : (held[P + 'R'] ? 1 : 0) - (held[P + 'L'] ? 1 : 0);
+    const hz = d ? 2.4 : hd2('U') ? 3.1 : hd2('D') ? 1.6 : 2.35, dir = d ? 0 : (hd2('R') ? 1 : 0) - (hd2('L') ? 1 : 0);
     this.sw = { t0: now(), hz, pw };
     sfx('swoosh');
     const W = (pl.n < 3 ? 150 : 110) * (pw ? .62 : 1), dtms = ts - ta, zb = pitchPos(this.p, 1)[2];
@@ -626,7 +631,7 @@ class Main extends Phaser.Scene {
     if (abs(w[0] - CATCH_X) < 2.4 && w[2] < 4.6) { sfx('box'); this.boxT = .35; } else { sfx('clk'); this.marks.push([w[0], w[2]]); }
     this.pl[this.turn].str = 0;
     if (sw) { sfx('strike'); this.endPitch(0, 'ABANICO!', sw.miss, 0xff5d5d, 1.1); }
-    else if (inSquare(e[0], e[2])) { sfx('strike'); this.endPitch(0, 'STRIKE', 'SE LA DEJO PASAR', 0xff5d5d, 1.1); }
+    else if (inSquare(e[0], e[2])) { sfx('strike'); this.endPitch(0, 'STRIKE', this.pl[this.turn].n < 3 ? 'DALE A B1 O TOCA' : 'SE LA DEJO PASAR', 0xff5d5d, this.pl[this.turn].n < 3 ? 1.8 : 1.1); }
     else this.endPitch(0, 'BOLA', 'NO CUENTA', 0xffffff, .9, 1);
   }
   next() {
@@ -648,13 +653,13 @@ class Main extends Phaser.Scene {
     this.ip = this.initQ.shift(); this.st = 'init'; this.t = 0; this.L = [0, 0, 0]; this.lp = 0; this.it = now();
   }
   uInit() {
-    const P = this.ip ? 'P2_' : 'P1_', L = this.L;
+    const L = this.L;
     let mv = 1;
-    if (tap[P + 'U']) L[this.lp] = (L[this.lp] + 1) % 26;
-    else if (tap[P + 'D']) L[this.lp] = (L[this.lp] + 25) % 26;
-    else if (tap[P + 'R']) this.lp = min(2, this.lp + 1);
-    else if (tap[P + 'L']) this.lp = max(0, this.lp - 1);
-    else if (tap[P + '1'] || tap[this.ip ? 'START2' : 'START1']) { if (this.lp < 2) this.lp++; else { sfx('ui2'); return this.saveInit(); } }
+    if (tp2('U')) L[this.lp] = (L[this.lp] + 1) % 26;
+    else if (tp2('D')) L[this.lp] = (L[this.lp] + 25) % 26;
+    else if (tp2('R')) this.lp = min(2, this.lp + 1);
+    else if (tp2('L')) this.lp = max(0, this.lp - 1);
+    else if (tp2('1') || tap.START1 || tap.START2) { if (this.lp < 2) this.lp++; else { sfx('ui2'); return this.saveInit(); } }
     else mv = 0;
     if (mv) { this.it = now(); sfx('ui'); }
     if (now() - this.it > 15000) return this.saveInit();
@@ -736,7 +741,7 @@ class Main extends Phaser.Scene {
       }
     }
     if (this.say.text) { const b = this.say.getBounds(); gu.fillStyle(0xffffff, .95).fillRoundedRect(b.x - 10, b.y - 8, b.width + 20, b.height + 16, 10).fillTriangle(b.centerX - 12, b.bottom + 7, b.centerX + 12, b.bottom + 7, b.centerX, b.bottom + 24); this.say.setTint(0xd62828).setDepth(56); }
-    if (this.tops.visible) { const b = this.tops.getBounds(); gu.fillStyle(0, .45).fillRoundedRect(b.x - 10, b.y - 8, b.width + 20, b.height + 16, 8); }
+    for (const o of [this.tops, this.help]) if (o.visible) { const b = o.getBounds(); gu.fillStyle(0, .45).fillRoundedRect(b.x - 10, b.y - 8, b.width + 20, b.height + 16, 8); }
     if (this.st == 'cover') {
       gu.lineStyle(6, 0xffffff, .8);
       for (let i = 0; i < 5; i++) gu.lineBetween(60 + i * 12, 560 - i * 22, 290 + i * 4, 420 - i * 8);
@@ -746,13 +751,13 @@ class Main extends Phaser.Scene {
     }
     // HUD y titulo
     if (this.demo) {
-      if (this.st != 'cover') this.menu.setText((n / 700 | 0) % 2 ? 'START 2: 2 JUGADORES' : 'PRESIONA UN BOTON');
+      if (this.st != 'cover') this.menu.setText(['PRESIONA B1 PARA JUGAR', 'O TOCA LA PANTALLA', 'START 2: 2 JUGADORES'][(n / 900 | 0) % 3]);
     } else if (this.mode) {
       const p = this.pl[this.turn];
       this.hudL.setText('J' + (this.turn + 1) + '  ' + p.s + ' PIES').setTint(PCOL[this.turn]);
       this.hudR.setText(this.mode == 2 ? 'J1 ' + this.pl[0].s + '  J2 ' + this.pl[1].s : 'REC ' + (memTop || DEF_TOP)[0].n + ' ' + (memTop || DEF_TOP)[0].s);
       for (let i = 0; i < 10; i++) chapita(gu, 26 + i * 22, 52, 16, 0, i < p.c ? 1 : .25);
-      this.hint.setText(p.n < 3 && (this.st == 'windup' || this.st == 'pitch') ? 'B1 BATEA  B2 PODER  JOY ALTURA' : '');
+      this.hint.setText(p.n < 3 && (this.st == 'windup' || this.st == 'pitch') ? 'B1 CUANDO SE CIERRE EL CIRCULO' : '');
       if (this.st == 'init') { const x = 400 - 75 + this.lp * 60; gu.fillStyle(PCOL[this.ip]).fillRect(x, 224, 30, 4); }
     }
     this.hudL.setVisible(!!this.mode && !this.demo); this.hudR.setVisible(!!this.mode && !this.demo);

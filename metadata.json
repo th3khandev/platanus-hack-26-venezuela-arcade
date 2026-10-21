@@ -1,5 +1,5 @@
 {
   "game_name": "CHAPITA BRAVA",
-  "description": "Béisbol de chapita en la calle del barrio: palo de escoba, la pared con el cuadro pintado y si rompes la ventana de la vecina es jonrón. 1 jugador contra la CPU o 2 por turnos.",
+  "description": "Béisbol de chapita en la calle del barrio: palo de escoba, la pared con el cuadro pintado y si rompes la ventana de la vecina es jonrón. Batea con B1 (o tocando la pantalla) justo cuando la chapita llega al cuadro rojo; B2 es batazo de poder y el joystick escoge la altura. 1 jugador contra la CPU o 2 por turnos.",
   "player_mode": "two_player"
 }
